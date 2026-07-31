@@ -2,11 +2,16 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import { ChatRoom, MemorySlots } from './types';
 import { DEFAULT_CUSTOM_PROMPT, DEFAULT_THINKING_MODE_INSTRUCTIONS, DEFAULT_ROLE_DEFINITION, DEFAULT_OUTPUT_CONTRACT } from './constants';
+import { DEFAULT_CLAUDE_MODEL } from './services/claudeClient';
+import { parseCharacterCardPng, cardToChatRoom } from './services/characterCard';
+import { ApiKeys, loadApiKeys, saveApiKeys, resolveGeminiKey } from './services/apiKeys';
+import { DEFAULT_OPENROUTER_MODEL } from './services/openRouterClient';
 import { ChatListView } from './components/ChatListView';
 import { ChatRoomView } from './components/ChatRoomView';
 
 export const App: React.FC = () => {
     const [ai, setAi] = useState<GoogleGenAI | null>(null);
+    const [apiKeys, setApiKeys] = useState<ApiKeys>(loadApiKeys);
     const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
     const [currentChatRoomId, setCurrentChatRoomId] = useState<string | null>(null);
     const [isDarkMode, setIsDarkMode] = useState(false);
@@ -53,6 +58,8 @@ export const App: React.FC = () => {
                         
                         newMem.short_term_memory = oldMem.short_term_memory || oldMem.episode || oldMem.summary || '';
                         newMem.planning = oldMem.planning || '';
+                        // 스탯 정의를 옮기지 않으면 로드할 때마다 방 설정이 통째로 사라진다.
+                        if (Array.isArray(oldMem.stats)) newMem.stats = oldMem.stats;
                     }
                     return newMem;
                 };
@@ -91,6 +98,13 @@ export const App: React.FC = () => {
                     })(),
                     ragThreshold: room.ragThreshold === 0.75 || room.ragThreshold === 0.65 || room.ragThreshold === 0.55 ? 0.0 : (room.ragThreshold ?? 0.0),
                     maxContextTurns: room.maxContextTurns ?? 3,
+                    // 기존 방은 임베딩 유사도 0.55로 거의 모든 엔트리가 걸려 들어왔다.
+                    // 시맨틱 트리거를 꺼진 상태로 시작하고, 필요하면 설정에서 켜도록 한다.
+                    lorebookThreshold: room.lorebookThreshold ?? 0,
+                    lorebookMaxEntries: room.lorebookMaxEntries ?? 10,
+                    provider: ['claude', 'openrouter'].includes(room.provider) ? room.provider : 'gemini',
+                    claudeModel: room.claudeModel ?? DEFAULT_CLAUDE_MODEL,
+                    openRouterModel: room.openRouterModel ?? DEFAULT_OPENROUTER_MODEL,
                 };
             });
             setChatRooms(migratedRooms);
@@ -102,11 +116,17 @@ export const App: React.FC = () => {
         }
     }, []);
 
-    // Initialize Gemini AI
+    // Gemini 클라이언트 초기화.
+    // 앱에 입력한 키를 우선하고, 없으면 .env.local 값을 쓴다(로컬 개발용).
+    // 키가 바뀌면 클라이언트를 다시 만든다.
     useEffect(() => {
-        if (process.env.GEMINI_API_KEY) {
-            setAi(new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }));
-        }
+        const key = resolveGeminiKey(apiKeys);
+        setAi(key ? new GoogleGenAI({ apiKey: key }) : null);
+    }, [apiKeys]);
+
+    const handleApiKeysChange = useCallback((keys: ApiKeys) => {
+        saveApiKeys(keys);
+        setApiKeys(keys);
     }, []);
 
     // Save chat rooms to localStorage whenever they change
@@ -150,6 +170,11 @@ export const App: React.FC = () => {
             modelName: 'gemini-3.1-pro-preview',
             ragThreshold: 0.0,
             maxContextTurns: 3,
+            lorebookThreshold: 0,
+            lorebookMaxEntries: 10,
+            provider: 'gemini',
+            claudeModel: DEFAULT_CLAUDE_MODEL,
+            openRouterModel: DEFAULT_OPENROUTER_MODEL,
         };
         setChatRooms(prev => [newRoom, ...prev]);
         setCurrentChatRoomId(newRoom.id);
@@ -192,6 +217,8 @@ export const App: React.FC = () => {
                         
                         newMem.short_term_memory = oldMem.short_term_memory || oldMem.episode || oldMem.summary || '';
                         newMem.planning = oldMem.planning || '';
+                        // 스탯 정의를 옮기지 않으면 로드할 때마다 방 설정이 통째로 사라진다.
+                        if (Array.isArray(oldMem.stats)) newMem.stats = oldMem.stats;
                     }
                     return newMem;
                 };
@@ -216,6 +243,12 @@ export const App: React.FC = () => {
                     thinkingModeInstructions: importedRoom.thinkingModeInstructions ?? DEFAULT_THINKING_MODE_INSTRUCTIONS,
                     modelName: importedRoom.modelName === 'gemini-3-pro-preview' ? 'gemini-3.1-pro-preview' : (importedRoom.modelName ?? 'gemini-3.1-pro-preview'),
                     ragThreshold: importedRoom.ragThreshold === 0.75 || importedRoom.ragThreshold === 0.65 || importedRoom.ragThreshold === 0.55 ? 0.0 : (importedRoom.ragThreshold ?? 0.0),
+                    maxContextTurns: importedRoom.maxContextTurns ?? 3,
+                    lorebookThreshold: importedRoom.lorebookThreshold ?? 0,
+                    lorebookMaxEntries: importedRoom.lorebookMaxEntries ?? 10,
+                    provider: ['claude', 'openrouter'].includes(importedRoom.provider) ? importedRoom.provider : 'gemini',
+                    claudeModel: importedRoom.claudeModel ?? DEFAULT_CLAUDE_MODEL,
+                    openRouterModel: importedRoom.openRouterModel ?? DEFAULT_OPENROUTER_MODEL,
                 };
     
                 if (chatRooms.some(room => room.id === newRoom.id)) {
@@ -228,7 +261,8 @@ export const App: React.FC = () => {
     
             } catch (error: any) {
                 console.error('Failed to import chat:', error);
-                console.error(`채팅을 가져오는 데 실패했습니다: ${error.message}`);
+                // 콘솔에만 남기면 실패해도 화면상 아무 일도 일어나지 않는다.
+                alert(`채팅을 가져오는 데 실패했습니다: ${error.message}`);
             }
             if (event.target) {
                 event.target.value = '';
@@ -237,6 +271,38 @@ export const App: React.FC = () => {
         reader.readAsText(file);
     };
     
+    const handleImportCharacterCard = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const buffer = e.target?.result;
+                if (!(buffer instanceof ArrayBuffer)) throw new Error('파일을 읽을 수 없습니다.');
+
+                const card = parseCharacterCardPng(buffer);
+                const { room, warnings } = cardToChatRoom(card);
+
+                setChatRooms(prev => [room, ...prev]);
+                setCurrentChatRoomId(room.id);
+
+                const summary = [
+                    `'${room.title}' 캐릭터를 불러왔습니다. (${card.spec.toUpperCase()})`,
+                    `로어북 ${room.lorebook?.length ?? 0}개, 첫 메시지 ${room.messages.length}개`,
+                    ...warnings.map(w => `· ${w}`),
+                ].join('\n');
+                alert(summary);
+            } catch (error: any) {
+                console.error('Failed to import character card:', error);
+                alert(`캐릭터 카드를 불러오지 못했습니다: ${error.message}`);
+            }
+            if (event.target) event.target.value = '';
+        };
+        reader.onerror = () => alert('파일을 읽는 중 오류가 발생했습니다.');
+        reader.readAsArrayBuffer(file);
+    };
+
     const handleSelectChat = (id: string) => {
         setCurrentChatRoomId(id);
     };
@@ -316,6 +382,7 @@ export const App: React.FC = () => {
                     isDarkMode={isDarkMode}
                     toggleTheme={toggleTheme}
                     onImportChat={handleImportChat}
+                    onImportCharacterCard={handleImportCharacterCard}
                 />
             </div>
         );
@@ -328,6 +395,8 @@ export const App: React.FC = () => {
                 chatRoom={currentChatRoom}
                 onBack={() => setCurrentChatRoomId(null)}
                 ai={ai}
+                apiKeys={apiKeys}
+                onApiKeysChange={handleApiKeysChange}
                 setCurrentChatRoom={setCurrentChatRoom}
             />
         </div>

@@ -1,4 +1,5 @@
 import { ChatRoom, MemorySlots } from '../types';
+import { buildStatPrompt } from './statEngine';
 
 /**
  * 2026 AI Roleplay Architecture Strategy
@@ -67,7 +68,7 @@ export class PromptEngine {
         2. **Consult Scenario**: Trigger the next event in [scenario] if the story stalls. YOU are the engine.
         3. **Filter through Persona Prism**: Pass the situation through [persona]. Express affection *through* the [persona] personality filter.
         4. **Apply Logic**: React based on biased reasoning and core values defined in [persona].
-        5. **Calculate Metrics**: Update Relationship Metrics in [state] based on the specific rules.
+        5. **Update State**: Reflect any change to the character's mood, stance, or goals in [state], following whatever metrics that slot actually defines. Do not invent metrics that are not already there.
         6. **Narrate**: Generate the response adhering to the Output Contract.
     </task_execution>
 
@@ -85,14 +86,12 @@ export class PromptEngine {
 <dynamic_context>
     <!-- High Depth: Immutable world rules and planning -->
     <world_rules depth="high">
-        ${this.buildPlanningContext(room.memory, room.mode || 'roleplay')}
-        ${this.buildWorldContext(room.memory)}${highLore}
+        ${this.buildPlanningContext(room.memory, room.mode || 'roleplay')}${highLore}
     </world_rules>
     
     <!-- Mid Depth: Character persona and historical memory -->
     <historical_memory depth="mid">
         ${this.buildCharacterContext(room.memory)}
-        ${this.buildRelationshipContext()}
         ${this.buildEpisodeContext(room.memory)}${midLore}${ragMemory}
     </historical_memory>
 </dynamic_context>
@@ -102,7 +101,6 @@ ${lowLore}
     1. Did I describe only my character's observation and actions?
     2. Did I restrict my knowledge to what the character actually knows?
     3. Is the reaction consistent with [S1] Core Identity and [L] Logic?
-    4. Did I apply the specific rules for [Affection] and [Obsession] changes?
 </final_instruction>
 `;
     }
@@ -230,7 +228,6 @@ ${lowLore}
 
 <current_design_state>
     ${this.buildPlanningContext(room.memory, room.mode || 'architect')}
-    ${this.buildWorldContext(room.memory)}
     ${this.buildCharacterContext(room.memory)}
 </current_design_state>
 
@@ -353,11 +350,23 @@ ${lowLore}
     }
 
     private static buildThinkingProtocol(mode: string, instructions: any): string {
-        if (mode === 'none') return '';
+        const instruction = instructions?.[mode] ?? '';
+
+        // 'none' 모드의 지시문은 "사고 태그를 쓰지 마라"는 내용이라 섹션을 통째로 빼면 모델에 전달되지 않는다.
+        // 아래의 Dual Processing 지시만 제외하고 사용자가 쓴 지시문은 그대로 보낸다.
+        if (mode === 'none') {
+            if (!instruction) return '';
+            return `
+    <thinking_protocol>
+        Mode: none
+        Instruction: ${instruction}
+    </thinking_protocol>`;
+        }
+
         return `
     <thinking_protocol>
         Mode: ${mode}
-        Instruction: ${instructions[mode]}
+        Instruction: ${instruction}
         Dual Processing (Think-then-Speak): You MUST use <thinking> tags to simulate an "Inner Monologue" before responding. Formulate the character's emotional reaction, check how their [persona] filters the user's action, and decide on their behavior BEFORE generating dialogue. This drastically reduces out-of-character (OOC) behavior and keeps the character consistent.
         Usage: Wrap your internal reasoning in <thinking>...</thinking> tags at the very beginning of your response.
     </thinking_protocol>`;
@@ -385,10 +394,6 @@ ${lowLore}
     </planning_layer>`;
     }
 
-    private static buildWorldContext(memory: MemorySlots): string {
-        return ``;
-    }
-
     private static buildCharacterContext(memory: MemorySlots): string {
         return `
     <character_layer>
@@ -404,35 +409,16 @@ ${lowLore}
             ${memory.state || 'No current state defined.'}
             - Current Emotion, Defense Mechanisms, Affinity/Trust Level, Active Goals.
             - STATUS PROGRESSION: Use this state to track how much the character's emotional defense mechanisms have crumbled. Characters must show gradual growth or collapse here.
-        </dynamic_state>
+        </dynamic_state>${this.buildStatContext(memory)}
         <user_persona>
             ${memory.user_persona || 'None.'}
         </user_persona>
     </character_layer>`;
     }
 
-    private static buildRelationshipContext(): string {
-        return `
-    <relationship_rules>
-        <rules>
-            [Affection] (0-200)
-            - 0-180: Normal range. 181-200: Deep Love. (Fixed when lovers)
-            - Increase: Direct positive interaction (+1~15).
-            - Decrease: Fast decrease on negative acts.
-            - Major Shift: Betrayal, Great Favor (+/- 5~30).
-            - ELSE: Maintain current level.
-            
-            [Obsession] (0-200)
-            - 0-100: Normal. 101-180: Warning. 181-200: Dangerous.
-            - Increase: User talks to other women/people (+10~15), User's Betrayal (+100), User's Indifference (+1~10).
-            - Decrease: User's attention (-1~10), Becoming lovers (-150), User's physical touch intensity (-10~15).
-            - ELSE: Maintain current level.
-
-            [OOC ANTI-DEGRADATION GUARD]
-            - Intense relationships, trauma, affection, or sexual arousal (쾌락) are mere *states*, they SHOULD NOT overly change the [S1 Core Identity] or [L Logic].
-            - Try to prevent a character from suddenly losing their defining quirks, pride, or intelligence just because the Obsession or Affection is high, or during adult themes. Maintain their unique gap and tension.
-        </rules>
-    </relationship_rules>`;
+    /** 스탯이 정의된 방에서만 수치 블록을 넣는다. 정의가 없으면 빈 문자열이라 프롬프트가 그대로다. */
+    private static buildStatContext(memory: MemorySlots): string {
+        return buildStatPrompt(memory.stats);
     }
 
     private static buildEpisodeContext(memory: MemorySlots): string {

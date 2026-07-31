@@ -1,4 +1,4 @@
-import { MemorySlots, LorebookEntry } from '../types';
+import { MemorySlots, LorebookEntry, isMemoryTextSlot } from '../types';
 
 /**
  * Memory Manager
@@ -10,7 +10,7 @@ export class MemoryManager {
     /**
      * Parses the AI response for <mem-update> tags and applies them to the current memory.
      */
-    public static applyUpdates(currentMemory: MemorySlots, currentLorebook: LorebookEntry[] | undefined, responseText: string): { newMemory: MemorySlots, newLorebook: LorebookEntry[], updateLog: string } {
+    public static applyUpdates(currentMemory: MemorySlots, currentLorebook: LorebookEntry[] | undefined, responseText: string, sourceMessageId?: string): { newMemory: MemorySlots, newLorebook: LorebookEntry[], updateLog: string } {
         const regex = /<mem-update\s+([^>]+)>([\s\S]*?)<\/mem-update>/gi;
         let match;
         let newMemory: MemorySlots = { persona: '', scenario: '', user_persona: '', state: '', short_term_memory: '', planning: '', ...currentMemory };
@@ -25,9 +25,9 @@ export class MemoryManager {
             const modeMatch = attrString.match(/mode="([^"]+)"/i);
             
             if (catMatch && modeMatch) {
-                const category = catMatch[1] as keyof MemorySlots;
+                const category = catMatch[1];
                 const mode = modeMatch[1];
-                if (newMemory[category] !== undefined) {
+                if (isMemoryTextSlot(category) && newMemory[category] !== undefined) {
                     newMemory[category] = this.patchMemory(newMemory[category], content, mode);
                     updateLog += `[${category}] (${mode})\n${content}\n\n`;
                 }
@@ -55,38 +55,73 @@ export class MemoryManager {
 
             if (action === 'delete') {
                 const initialLength = newLorebook.length;
-                newLorebook = newLorebook.filter(entry => !entry.keys.some(k => keys.includes(k)));
+                newLorebook = this.removeLorebookEntries(newLorebook, keys);
                 if (newLorebook.length < initialLength) {
                     updateLog += `[Lorebook Deleted] Keys: ${keys.join(', ')}\n\n`;
                 }
             } else if (action === 'add' || action === 'update') {
-                // Check if an entry with overlapping keys exists
-                const existingIndex = newLorebook.findIndex(entry => entry.keys.some(k => keys.includes(k)));
-                
-                if (existingIndex >= 0 && action === 'update') {
-                    newLorebook[existingIndex] = {
-                        ...newLorebook[existingIndex],
-                        keys: Array.from(new Set([...newLorebook[existingIndex].keys, ...keys])),
-                        content,
-                        depth
-                    };
-                    updateLog += `[Lorebook Updated] Keys: ${keys.join(', ')}\n${content}\n\n`;
-                } else {
-                    const newEntry: LorebookEntry = {
-                        id: `lore_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                        keys,
-                        content,
-                        depth,
-                        probability: 100,
-                        recursable: false
-                    };
-                    newLorebook.push(newEntry);
-                    updateLog += `[Lorebook Added] Keys: ${keys.join(', ')}\n${content}\n\n`;
-                }
+                const result = this.upsertLorebookEntry(newLorebook, { keys, content, depth, sourceMessageId });
+                newLorebook = result.lorebook;
+                const label = result.action === 'updated' ? 'Updated' : 'Added';
+                updateLog += `[Lorebook ${label}] Keys: ${keys.join(', ')}\n${content}\n\n`;
             }
         }
 
         return { newMemory, newLorebook, updateLog };
+    }
+
+    /**
+     * 로어북에 엔트리를 추가하거나, 키가 겹치는 기존 엔트리 하나를 갱신한다.
+     *
+     * 키가 하나라도 겹치는 엔트리를 전부 지우던 기존 동작은 데이터 손실이 크다.
+     * 예를 들어 keys=["왕국"]인 엔트리를 새로 넣으면 "왕국"을 키로 가진 다른 엔트리가
+     * 모두 사라졌다. 여기서는 첫 번째로 겹치는 엔트리만 갱신하고 나머지는 보존한다.
+     */
+    public static upsertLorebookEntry(
+        lorebook: LorebookEntry[],
+        entry: {
+            keys: string[];
+            content: string;
+            depth: 'high' | 'mid' | 'low';
+            embedding?: number[];
+            sourceMessageId?: string;
+        }
+    ): { lorebook: LorebookEntry[]; action: 'added' | 'updated' } {
+        const keySet = new Set(entry.keys.map(k => k.toLowerCase()));
+        const index = lorebook.findIndex(e => e.keys.some(k => keySet.has(k.toLowerCase())));
+
+        if (index >= 0) {
+            const next = [...lorebook];
+            next[index] = {
+                ...next[index],
+                keys: Array.from(new Set([...next[index].keys, ...entry.keys])),
+                content: entry.content,
+                depth: entry.depth,
+                embedding: entry.embedding ?? next[index].embedding,
+                sourceMessageId: entry.sourceMessageId ?? next[index].sourceMessageId,
+            };
+            return { lorebook: next, action: 'updated' };
+        }
+
+        return {
+            lorebook: [...lorebook, {
+                id: `lore_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                keys: entry.keys,
+                content: entry.content,
+                depth: entry.depth,
+                embedding: entry.embedding,
+                probability: 100,
+                recursable: false,
+                sourceMessageId: entry.sourceMessageId,
+            }],
+            action: 'added',
+        };
+    }
+
+    /** 키가 겹치는 엔트리를 제거한다. delete 액션 전용. */
+    public static removeLorebookEntries(lorebook: LorebookEntry[], keys: string[]): LorebookEntry[] {
+        const keySet = new Set(keys.map(k => k.toLowerCase()));
+        return lorebook.filter(e => !e.keys.some(k => keySet.has(k.toLowerCase())));
     }
 
     /**

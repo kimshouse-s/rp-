@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
-import { ChatRoom, ThinkingMode, LorebookEntry, MemorySlots } from '../types';
+import { ChatRoom, ThinkingMode, LorebookEntry, MemorySlots, ChatProvider, StatDefinition, StatKind } from '../types';
 import { DEFAULT_CUSTOM_PROMPT, DEFAULT_THINKING_MODE_INSTRUCTIONS, DEFAULT_ROLE_DEFINITION, DEFAULT_OUTPUT_CONTRACT } from '../constants';
+import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL } from '../services/claudeClient';
+import { OPENROUTER_MODELS, DEFAULT_OPENROUTER_MODEL } from '../services/openRouterClient';
+import { ApiKeys } from '../services/apiKeys';
 import { ExportIcon } from './Icons';
 import { PromptEngine } from '../services/promptEngine';
 import { MemoryManager } from '../services/memoryManager';
@@ -9,9 +12,13 @@ interface SettingsModalProps {
     room: ChatRoom;
     onClose: () => void;
     onSave: (updater: (prev: ChatRoom | null) => ChatRoom | null) => void;
+    apiKeys: ApiKeys;
+    onApiKeysChange: (keys: ApiKeys) => void;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onSave }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onSave, apiKeys, onApiKeysChange }) => {
+    // API 키는 방이 아니라 브라우저 전체에 공유되므로 별도로 관리한다.
+    const [draftKeys, setDraftKeys] = useState<ApiKeys>(apiKeys);
     const [currentSettings, setCurrentSettings] = useState({
         customPrompt: room.customPrompt,
         roleDefinition: room.roleDefinition,
@@ -22,11 +29,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onS
         presencePenalty: room.presencePenalty ?? 0,
         frequencyPenalty: room.frequencyPenalty ?? 0,
         thinkingModeInstructions: room.thinkingModeInstructions,
+        provider: room.provider ?? 'gemini',
         modelName: room.modelName,
+        claudeModel: room.claudeModel ?? DEFAULT_CLAUDE_MODEL,
+        openRouterModel: room.openRouterModel ?? DEFAULT_OPENROUTER_MODEL,
         maxContextTurns: room.maxContextTurns || 3,
         ragThreshold: room.ragThreshold ?? 0.0,
+        lorebookThreshold: room.lorebookThreshold ?? 0,
+        lorebookMaxEntries: room.lorebookMaxEntries ?? 10,
     });
-    const [activeTab, setActiveTab] = useState<'memory' | 'system' | 'model' | 'lorebook' | 'rag'>('memory');
+    const [activeTab, setActiveTab] = useState<'memory' | 'stats' | 'system' | 'model' | 'lorebook' | 'rag'>('memory');
+    const [stats, setStats] = useState<StatDefinition[]>(room.memory?.stats ?? []);
     const [activeMemorySlot, setActiveMemorySlot] = useState<keyof MemorySlots>('persona');
     const [activeInstructionTab, setActiveInstructionTab] = useState<ThinkingMode>('simple');
     
@@ -38,7 +51,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onS
     const [vectorMemory, setVectorMemory] = useState(room.vectorMemory || []);
 
     const handleSave = () => {
-        onSave(prev => prev ? { ...prev, ...currentSettings, lorebook: lorebookEntries, vectorMemory } : null);
+        onApiKeysChange(draftKeys);
+        onSave(prev => prev ? {
+            ...prev,
+            ...currentSettings,
+            memory: { ...currentSettings.memory, stats: stats.length ? stats : undefined },
+            lorebook: lorebookEntries,
+            vectorMemory,
+        } : null);
         onClose();
     };
 
@@ -90,7 +110,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onS
             URL.revokeObjectURL(url);
         } catch (error) {
             console.error("Export failed:", error);
-            console.error("채팅 내보내기에 실패했습니다.");
+            alert("채팅 내보내기에 실패했습니다.");
         }
     };
 
@@ -119,6 +139,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onS
                 <div className="modal-body">
                     <div className="tab-buttons main-tabs">
                         <button className={`tab-button ${activeTab === 'memory' ? 'active' : ''}`} onClick={() => setActiveTab('memory')}>🧠 메모리 (Data)</button>
+                        <button className={`tab-button ${activeTab === 'stats' ? 'active' : ''}`} onClick={() => setActiveTab('stats')}>📊 스탯</button>
                         <button className={`tab-button ${activeTab === 'lorebook' ? 'active' : ''}`} onClick={() => setActiveTab('lorebook')}>📚 로어북 (Lore)</button>
                         <button className={`tab-button ${activeTab === 'rag' ? 'active' : ''}`} onClick={() => setActiveTab('rag')}>🕰️ 장기 기억 (RAG)</button>
                         <button className={`tab-button ${activeTab === 'system' ? 'active' : ''}`} onClick={() => setActiveTab('system')}>🛠️ 시스템 (Rules)</button>
@@ -157,6 +178,80 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onS
                         </div>
                     )}
 
+                    {activeTab === 'stats' && (
+                        <div className="settings-section">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                                <h4>📊 스탯</h4>
+                                <button className="action-button" onClick={() => setStats([...stats, {
+                                    id: `stat${stats.length + 1}`, label: '새 스탯', kind: 'persistent',
+                                    min: 0, max: 100, value: 0, baseline: 0, decayPerTurn: 1,
+                                }])}>+ 직접 추가</button>
+                            </div>
+
+                            <div className="lorebook-help" style={{ background: 'var(--bg-color)', padding: '1rem', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.85rem' }}>
+                                <p style={{ margin: '0 0 0.5rem 0', fontWeight: 'bold' }}>💡 스탯은 코드가 규칙을 강제합니다</p>
+                                <ul style={{ margin: 0, paddingLeft: '1.5rem', color: 'var(--text-secondary)' }}>
+                                    <li>AI는 <strong>증감만</strong> 제안하고, 상한·감쇠·발현은 앱이 계산합니다. AI가 규칙을 무시해도 값이 한쪽으로 흐르지 않습니다.</li>
+                                    <li><strong>지속형</strong>: 호감도·집착도처럼 남는 값. 아무 일 없으면 기준선으로 조금씩 돌아갑니다.</li>
+                                    <li><strong>게이지형</strong>: 인내심처럼 차오르다 임계를 넘으면 한 번 터지고 리셋됩니다.</li>
+                                    <li>스탯을 하나도 두지 않으면 이 기능은 프롬프트에서 완전히 빠집니다.</li>
+                                </ul>
+                                <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                    <button className="preset-button" onClick={() => setStats([...stats, { id: 'affection', label: '호감도', kind: 'persistent', min: 0, max: 100, value: 0, baseline: 10, decayPerTurn: 1, description: '진심 어린 교류에만 오른다. 형식적인 호의로는 움직이지 않는다.' }])}>+ 호감도</button>
+                                    <button className="preset-button" onClick={() => setStats([...stats, { id: 'obsession', label: '집착도', kind: 'persistent', min: 0, max: 100, value: 0, baseline: 0, decayPerTurn: 2, description: '불안이 자극될 때만 오른다. 안심하면 빠르게 가라앉는다.' }])}>+ 집착도</button>
+                                    <button className="preset-button" onClick={() => setStats([...stats, { id: 'patience', label: '인내심', kind: 'gauge', min: 0, max: 100, value: 0, threshold: 100, resetTo: 0, triggerEffect: '참아온 말을 한 번에 쏟아낸다. 이후 다시 평소 태도로 돌아간다.', description: '무시당하거나 선을 넘길 때 쌓인다.' }])}>+ 인내심 (게이지)</button>
+                                </div>
+                            </div>
+
+                            {stats.length === 0 ? (
+                                <p className="description">정의된 스탯이 없습니다. 위 버튼으로 추가하세요.</p>
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                    {stats.map((stat, i) => {
+                                        const patch = (changes: Partial<StatDefinition>) =>
+                                            setStats(stats.map((s, j) => (j === i ? { ...s, ...changes } : s)));
+                                        const num = (v: string) => (v === '' ? 0 : parseFloat(v));
+                                        return (
+                                            <div key={i} style={{ background: 'var(--bg-secondary)', padding: '0.75rem', borderRadius: '8px' }}>
+                                                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                                                    <input className="chat-title-input" style={{ flex: 2 }} placeholder="표시 이름" value={stat.label} onChange={e => patch({ label: e.target.value })} />
+                                                    <input className="chat-title-input" style={{ flex: 2 }} placeholder="영문 id" value={stat.id} onChange={e => patch({ id: e.target.value.replace(/[^A-Za-z0-9_]/g, '') })} />
+                                                    <select className="chat-title-input" style={{ flex: 2 }} value={stat.kind} onChange={e => patch({ kind: e.target.value as StatKind })}>
+                                                        <option value="persistent">지속형</option>
+                                                        <option value="gauge">게이지형</option>
+                                                    </select>
+                                                    <button className="action-button danger" onClick={() => setStats(stats.filter((_, j) => j !== i))}>삭제</button>
+                                                </div>
+
+                                                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                                                    <label style={{ flex: 1, fontSize: '0.8rem' }}>최소<input className="chat-title-input" type="number" value={stat.min} onChange={e => patch({ min: num(e.target.value) })} /></label>
+                                                    <label style={{ flex: 1, fontSize: '0.8rem' }}>최대<input className="chat-title-input" type="number" value={stat.max} onChange={e => patch({ max: num(e.target.value) })} /></label>
+                                                    <label style={{ flex: 1, fontSize: '0.8rem' }}>현재값<input className="chat-title-input" type="number" value={stat.value} onChange={e => patch({ value: num(e.target.value) })} /></label>
+                                                    {stat.kind === 'persistent' ? (
+                                                        <>
+                                                            <label style={{ flex: 1, fontSize: '0.8rem' }}>기준선<input className="chat-title-input" type="number" value={stat.baseline ?? 0} onChange={e => patch({ baseline: num(e.target.value) })} /></label>
+                                                            <label style={{ flex: 1, fontSize: '0.8rem' }}>턴당 감쇠<input className="chat-title-input" type="number" value={stat.decayPerTurn ?? 0} onChange={e => patch({ decayPerTurn: num(e.target.value) })} /></label>
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <label style={{ flex: 1, fontSize: '0.8rem' }}>발현 임계<input className="chat-title-input" type="number" value={stat.threshold ?? stat.max} onChange={e => patch({ threshold: num(e.target.value) })} /></label>
+                                                            <label style={{ flex: 1, fontSize: '0.8rem' }}>리셋값<input className="chat-title-input" type="number" value={stat.resetTo ?? stat.min} onChange={e => patch({ resetTo: num(e.target.value) })} /></label>
+                                                        </>
+                                                    )}
+                                                </div>
+
+                                                {stat.kind === 'gauge' && (
+                                                    <textarea rows={2} style={{ width: '100%', marginBottom: '0.5rem' }} placeholder="발현했을 때 무슨 일이 일어나는지" value={stat.triggerEffect ?? ''} onChange={e => patch({ triggerEffect: e.target.value })} />
+                                                )}
+                                                <textarea rows={2} style={{ width: '100%' }} placeholder="언제 오르고 내리는지 (AI에게 그대로 전달됩니다)" value={stat.description ?? ''} onChange={e => patch({ description: e.target.value })} />
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {activeTab === 'lorebook' && (
                         <div className="settings-section">
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
@@ -179,6 +274,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onS
                                     + 새 항목 추가
                                 </button>
                             </div>
+
+                            <div className="setting-group" style={{ marginBottom: '1.5rem', background: 'var(--bg-secondary)', padding: '1rem', borderRadius: '8px' }}>
+                                <div className="slider-group">
+                                    <label htmlFor="lorebookMaxEntries">
+                                        <span>한 턴 최대 주입 개수</span>
+                                        <span>{currentSettings.lorebookMaxEntries ?? 10}개</span>
+                                    </label>
+                                    <input
+                                        type="range" id="lorebookMaxEntries" name="lorebookMaxEntries"
+                                        min="1" max="30" step="1"
+                                        value={currentSettings.lorebookMaxEntries ?? 10}
+                                        onChange={handleSliderChange}
+                                    />
+                                    <p className="description" style={{ marginTop: '0.25rem', fontSize: '0.8rem' }}>
+                                        조건에 걸린 항목이 많아도 이 개수까지만 주입합니다.
+                                        중요도(High &gt; Mid &gt; Low)와 트리거 방식(정규식 &gt; 키워드 &gt; 유사도) 순으로 뽑습니다.
+                                    </p>
+                                </div>
+
+                                <div className="slider-group" style={{ marginTop: '1rem' }}>
+                                    <label htmlFor="lorebookThreshold">
+                                        <span>임베딩 유사도 트리거</span>
+                                        <span>{(currentSettings.lorebookThreshold ?? 0) === 0 ? '꺼짐' : (currentSettings.lorebookThreshold ?? 0).toFixed(2)}</span>
+                                    </label>
+                                    <input
+                                        type="range" id="lorebookThreshold" name="lorebookThreshold"
+                                        min="0" max="0.95" step="0.05"
+                                        value={currentSettings.lorebookThreshold ?? 0}
+                                        onChange={handleSliderChange}
+                                    />
+                                    <p className="description" style={{ marginTop: '0.25rem', fontSize: '0.8rem' }}>
+                                        <strong>0 (권장)</strong>: 키워드와 정규식으로만 트리거합니다.<br/>
+                                        0보다 크면 키워드가 없어도 의미가 비슷하면 주입합니다.
+                                        값이 낮으면 거의 모든 항목이 걸리므로 켤 거라면 0.8 이상을 권합니다.
+                                    </p>
+                                </div>
+                            </div>
+
                             <div className="lorebook-help" style={{ background: 'var(--bg-color)', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
                                 <p style={{ margin: '0 0 0.5rem 0', fontWeight: 'bold' }}>💡 로어북(Lorebook) 사용법</p>
                                 <ul style={{ margin: 0, paddingLeft: '1.5rem', color: 'var(--text-secondary)' }}>
@@ -398,21 +531,114 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onS
 
                     {activeTab === 'model' && (
                         <div className="settings-section">
-                            {/* Existing Model Settings */}
                             <div className="slider-group">
-                                <label htmlFor="modelName">모델 선택</label>
-                                <select 
-                                    id="modelName" 
-                                    value={currentSettings.modelName} 
-                                    onChange={(e) => setCurrentSettings(prev => ({ ...prev, modelName: e.target.value }))}
+                                <label htmlFor="provider">생성 엔진</label>
+                                <select
+                                    id="provider"
+                                    value={currentSettings.provider}
+                                    onChange={(e) => setCurrentSettings(prev => ({ ...prev, provider: e.target.value as ChatProvider }))}
                                     className="chat-title-input"
                                     style={{padding: '8px'}}
                                 >
-                                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (권장)</option>
-                                    <option value="gemini-3-flash-preview">Gemini 3 Flash (빠름)</option>
-                                    <option value="gemini-2.5-flash-image">Gemini 2.5 Flash Image</option>
+                                    <option value="gemini">Gemini (키 필요)</option>
+                                    <option value="openrouter">OpenRouter (키 하나로 여러 모델)</option>
+                                    <option value="claude">Claude 구독 (PC 전용, 키 불필요)</option>
                                 </select>
+                                <p className="description" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                                    {currentSettings.provider === 'claude'
+                                        ? 'PC에서 실행 중인 개발 서버를 거쳐 Claude 로그인 자격으로 생성합니다. 서버가 필요해 폰 단독으로는 쓸 수 없습니다.'
+                                        : currentSettings.provider === 'openrouter'
+                                            ? '브라우저에서 OpenRouter를 직접 호출합니다. 서버가 필요 없어 폰에서도 그대로 동작합니다.'
+                                            : '브라우저에서 Gemini API를 직접 호출합니다.'}
+                                </p>
                             </div>
+
+                            <div className="setting-group" style={{ marginBottom: '1.5rem', background: 'var(--bg-secondary)', padding: '1rem', borderRadius: '8px' }}>
+                                <h4 style={{ marginTop: 0 }}>🔑 API 키</h4>
+                                <p className="description" style={{ fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+                                    이 브라우저에만 저장되며 서버로 전송되지 않습니다. 모든 채팅방이 함께 씁니다.
+                                </p>
+
+                                <label htmlFor="geminiKey" style={{ fontSize: '0.85rem' }}>
+                                    Gemini 키 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">발급받기</a>
+                                </label>
+                                <input
+                                    id="geminiKey" type="password" className="chat-title-input" autoComplete="off"
+                                    placeholder="AIza..." value={draftKeys.gemini}
+                                    onChange={e => setDraftKeys(prev => ({ ...prev, gemini: e.target.value }))}
+                                    style={{ width: '100%', marginBottom: '0.75rem' }}
+                                />
+
+                                <label htmlFor="openRouterKey" style={{ fontSize: '0.85rem' }}>
+                                    OpenRouter 키 <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">발급받기</a>
+                                </label>
+                                <input
+                                    id="openRouterKey" type="password" className="chat-title-input" autoComplete="off"
+                                    placeholder="sk-or-..." value={draftKeys.openrouter}
+                                    onChange={e => setDraftKeys(prev => ({ ...prev, openrouter: e.target.value }))}
+                                    style={{ width: '100%' }}
+                                />
+                                <p className="description" style={{ fontSize: '0.78rem', marginTop: '0.5rem' }}>
+                                    Gemini 키는 장기 기억·로어북의 유사도 검색에도 쓰입니다. 다른 엔진을 쓰더라도
+                                    그 기능을 켜려면 필요합니다 (기본 설정에서는 꺼져 있어 없어도 됩니다).
+                                </p>
+                            </div>
+
+                            {currentSettings.provider === 'openrouter' ? (
+                                <div className="slider-group">
+                                    <label htmlFor="openRouterModel">OpenRouter 모델</label>
+                                    <select
+                                        id="openRouterModel"
+                                        value={currentSettings.openRouterModel}
+                                        onChange={(e) => setCurrentSettings(prev => ({ ...prev, openRouterModel: e.target.value }))}
+                                        className="chat-title-input"
+                                        style={{padding: '8px'}}
+                                    >
+                                        {OPENROUTER_MODELS.map(m => (
+                                            <option key={m.id} value={m.id}>{m.label}</option>
+                                        ))}
+                                    </select>
+                                    <p className="description" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                                        모델별 가격은 <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer">openrouter.ai/models</a> 에서 확인하세요.
+                                    </p>
+                                </div>
+                            ) : currentSettings.provider === 'claude' ? (
+                                <div className="slider-group">
+                                    <label htmlFor="claudeModel">Claude 모델</label>
+                                    <select
+                                        id="claudeModel"
+                                        value={currentSettings.claudeModel}
+                                        onChange={(e) => setCurrentSettings(prev => ({ ...prev, claudeModel: e.target.value }))}
+                                        className="chat-title-input"
+                                        style={{padding: '8px'}}
+                                    >
+                                        {CLAUDE_MODELS.map(m => (
+                                            <option key={m.id} value={m.id}>{m.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            ) : (
+                                <div className="slider-group">
+                                    <label htmlFor="modelName">Gemini 모델</label>
+                                    <select
+                                        id="modelName"
+                                        value={currentSettings.modelName}
+                                        onChange={(e) => setCurrentSettings(prev => ({ ...prev, modelName: e.target.value }))}
+                                        className="chat-title-input"
+                                        style={{padding: '8px'}}
+                                    >
+                                        <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (권장)</option>
+                                        <option value="gemini-3-flash-preview">Gemini 3 Flash (빠름)</option>
+                                        <option value="gemini-2.5-flash-image">Gemini 2.5 Flash Image</option>
+                                    </select>
+                                </div>
+                            )}
+
+                            {currentSettings.provider === 'claude' && (
+                                <p className="description" style={{ marginBottom: '1rem', fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
+                                    Claude에는 temperature·Top-P·페널티가 적용되지 않습니다. 아래 슬라이더는 Gemini 전용입니다.
+                                </p>
+                            )}
                             <div className="slider-group">
                                 <label htmlFor="temperature"><span>온도 (창의성)</span> <span>{currentSettings.temperature.toFixed(2)}</span></label>
                                 <input type="range" id="temperature" name="temperature" min="0" max="1" step="0.05" value={currentSettings.temperature} onChange={handleSliderChange} />

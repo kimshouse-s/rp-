@@ -21,7 +21,10 @@ export class RAGService {
     /**
      * Generates an embedding for a given text.
      */
-    public static async generateEmbedding(ai: GoogleGenAI, text: string): Promise<number[]> {
+    public static async generateEmbedding(ai: GoogleGenAI | null, text: string): Promise<number[]> {
+        // Anthropic에는 임베딩 API가 없어 프로바이더가 Claude여도 임베딩은 Gemini를 쓴다.
+        // Gemini 키가 아예 없으면 임베딩 기반 기능만 조용히 비활성화된다.
+        if (!ai) return [];
         try {
             const result = await ai.models.embedContent({
                 model: 'gemini-embedding-2-preview',
@@ -43,7 +46,7 @@ export class RAGService {
      * Queries the vector memory for relevant chunks based on the current context.
      */
     public static async queryMemory(
-        ai: GoogleGenAI,
+        ai: GoogleGenAI | null,
         memory: VectorMemoryChunk[],
         queryText: string,
         threshold: number = 0.55,

@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Message, FilterSettings } from '../types';
 import { EditIcon, DeleteIcon, RegenerateIcon } from './Icons';
 
@@ -8,10 +8,52 @@ interface Block {
     content: React.ReactNode[] | string;
 }
 
+/** 확장자가 URL에 안 드러나는 흔한 이미지 호스트. 이 도메인이면 경로만 보고 이미지로 취급한다. */
+const IMAGE_HOST_PATTERN = 'i\\.imgur\\.com|imgur\\.com|i\\.redd\\.it|pbs\\.twimg\\.com|cdn\\.discordapp\\.com|media\\.discordapp\\.net|files\\.catbox\\.moe';
+
+/** 이미지가 실제로 안 열리면 원본 링크로 되돌린다. 호스트만 보고 판단하므로 오탐이 있을 수 있다. */
+const MessageImage: React.FC<{ url: string }> = ({ url }) => {
+    const [failed, setFailed] = useState(false);
+
+    if (failed) {
+        return (
+            <div className="message-bubble">
+                <div className="message-content">
+                    <a href={url} target="_blank" rel="noopener noreferrer">{url}</a>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <img
+            src={url}
+            alt="첨부 이미지"
+            className="message-image-standalone"
+            onError={() => setFailed(true)}
+            onClick={() => window.open(url, '_blank', 'noopener')}
+        />
+    );
+};
+
 const AIMessageContent: React.FC<{ text: string, filterSettings: FilterSettings }> = ({ text, filterSettings }) => {
-    const blocks = useMemo(() => { text = text || ""; 
-        const regex = /(\【[\s\S]*?\】)|(\(감정: [\s\S]*?\))|(\([^)]*?속마음: [\s\S]*?\))|(\*[\s\S]*?\*)|(\[Scene:[\s\S]*?\])|(\[서술\]|\[환경 묘사\])|(\*\*\*[\s\S]*?\*\*\*)|(\*\*[\s\S]*?\*\*)|(https?:\/\/[^\s]+\.(?:jpg|jpeg|png|gif|webp|svg)(?:\?[^\s]*)?)/gi;
-        
+    const blocks = useMemo(() => { text = text || "";
+        // 굵게(**) / 굵은 기울임(***) 패턴은 반드시 기울임(*)보다 앞에 와야 한다.
+        // 정규식 교체는 왼쪽부터 시도하므로, `*`가 먼저 있으면 `**`를 항상 가로채 굵게가 사라진다.
+        const regex = new RegExp(
+            '(\\【[\\s\\S]*?\\】)'                                   // 1 name
+            + '|(\\(감정: [\\s\\S]*?\\))'                            // 2 emotion
+            + '|(\\([^)]*?속마음: [\\s\\S]*?\\))'                    // 3 innerThought
+            + '|(\\[Scene:[\\s\\S]*?\\])'                           // 4 scene
+            + '|(\\[서술\\]|\\[환경 묘사\\])'                        // 5 narrationHeader
+            + '|(\\*\\*\\*[\\s\\S]*?\\*\\*\\*)'                      // 6 boldItalic
+            + '|(\\*\\*[\\s\\S]*?\\*\\*)'                            // 7 bold
+            + '|(\\*[\\s\\S]*?\\*)'                                  // 8 italic
+            + '|(https?:\\/\\/(?:[^\\s<>"]+\\.(?:jpe?g|png|gif|webp|svg|avif|bmp)'
+            + `|(?:${IMAGE_HOST_PATTERN})\\/[^\\s<>"]+)(?:\\?[^\\s<>"]*)?)`, // 9 imageUrl
+            'gi'
+        );
+
         const finalBlocks: Block[] = [];
         let currentTextNodes: React.ReactNode[] = [];
         let lastIndex = 0;
@@ -24,14 +66,24 @@ const AIMessageContent: React.FC<{ text: string, filterSettings: FilterSettings 
             }
         };
 
+        // 마커 사이의 평문도 마지막 꼬리와 똑같이 서술로 취급한다.
+        // 예전에는 꼬리만 감싸서 서술 필터가 본문 대부분에 안 먹었다.
+        const pushNarration = (value: string, key: number) => {
+            if (!value) return;
+            currentTextNodes.push(
+                <span key={`n${key}`} className={`narration ${filterSettings.showNarration ? '' : 'hidden'}`}>
+                    {value}
+                </span>
+            );
+        };
+
         while ((match = regex.exec(text)) !== null) {
             if (match.index > lastIndex) {
-                const plainText = text.substring(lastIndex, match.index);
-                if (plainText) currentTextNodes.push(plainText);
+                pushNarration(text.substring(lastIndex, match.index), lastIndex);
             }
 
-            const [fullMatch, name, emotion, innerThought, italic, scene, narrationHeader, boldItalic, bold, imageUrl] = match;
-            
+            const [fullMatch, name, emotion, innerThought, scene, narrationHeader, boldItalic, bold, italic, imageUrl] = match;
+
             if (imageUrl) {
                 pushTextBlock();
                 finalBlocks.push({ type: 'image', content: imageUrl });
@@ -46,38 +98,23 @@ const AIMessageContent: React.FC<{ text: string, filterSettings: FilterSettings 
                 else if (italic) currentTextNodes.push(<em key={match.index}>{italic.slice(1,-1)}</em>);
                 else currentTextNodes.push(fullMatch);
             }
-            
+
             lastIndex = regex.lastIndex;
         }
 
         if (lastIndex < (text?.length || 0)) {
-            const remainingText = text.substring(lastIndex);
-            if (remainingText) {
-                 currentTextNodes.push(
-                    <span key={lastIndex} className={`narration ${filterSettings.showNarration ? '' : 'hidden'}`}>
-                        {remainingText}
-                    </span>
-                 );
-            }
+            pushNarration(text.substring(lastIndex), lastIndex);
         }
-        
+
         pushTextBlock();
         return finalBlocks;
     }, [text, filterSettings]);
-    
+
     return (
         <div className="message-stack">
             {blocks.map((block, index) => {
                 if (block.type === 'image') {
-                    return (
-                        <img 
-                            key={index} 
-                            src={block.content as string} 
-                            alt="AI Content" 
-                            className="message-image-standalone"
-                            onClick={() => window.open(block.content as string, '_blank')}
-                        />
-                    );
+                    return <MessageImage key={index} url={block.content as string} />;
                 } else {
                     return (
                         <div key={index} className="message-bubble">
@@ -102,11 +139,15 @@ interface MessageComponentProps {
     onStartEdit: (message: Message) => void;
     onDelete: (id: string) => void;
     onRegenerate: (id: string) => void;
+    onSelectVariant: (id: string, index: number) => void;
     filterSettings: FilterSettings;
 }
 
-export const MessageComponent: React.FC<MessageComponentProps> = React.memo(({ message, isEditing, editingText, onEditingTextChange, onSaveEdit, onCancelEdit, onStartEdit, onDelete, onRegenerate, filterSettings }) => {
+export const MessageComponent: React.FC<MessageComponentProps> = React.memo(({ message, isEditing, editingText, onEditingTextChange, onSaveEdit, onCancelEdit, onStartEdit, onDelete, onRegenerate, onSelectVariant, filterSettings }) => {
     const [showContext, setShowContext] = React.useState(false);
+
+    const variantCount = message.variants?.length ?? 0;
+    const activeVariant = message.activeVariant ?? 0;
 
     return (
         <div className={`message ${message.sender}`}>
@@ -167,6 +208,23 @@ export const MessageComponent: React.FC<MessageComponentProps> = React.memo(({ m
                     )}
                     
                     <div className="message-toolbar">
+                            {message.sender === 'ai' && variantCount > 1 && (
+                                <span className="variant-nav">
+                                    <button
+                                        className="toolbar-button"
+                                        onClick={() => onSelectVariant(message.id, activeVariant - 1)}
+                                        disabled={activeVariant === 0}
+                                        title="이전 후보"
+                                    >‹</button>
+                                    <span className="variant-count">{activeVariant + 1}/{variantCount}</span>
+                                    <button
+                                        className="toolbar-button"
+                                        onClick={() => onSelectVariant(message.id, activeVariant + 1)}
+                                        disabled={activeVariant === variantCount - 1}
+                                        title="다음 후보"
+                                    >›</button>
+                                </span>
+                            )}
                             {message.sender === 'user' && <button className="toolbar-button" onClick={() => onStartEdit(message)}><EditIcon /></button>}
                             {message.sender === 'ai' && <button className="toolbar-button" onClick={() => setShowContext(!showContext)} title="컨텍스트 보기">🔍</button>}
                             {message.sender === 'ai' && <button className="toolbar-button" onClick={() => onRegenerate(message.id)}><RegenerateIcon /></button>}

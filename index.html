@@ -75,6 +75,10 @@
 
         html, body, #root {
             height: 100%;
+            /* 모바일 브라우저는 주소창·키보드가 뜨면 100%가 실제 보이는 높이보다 커진다.
+               dvh는 그 변화를 따라가므로 입력창이 화면 밖으로 밀리지 않는다.
+               미지원 브라우저는 이 줄을 무시하고 위의 100%를 쓴다. */
+            height: 100dvh;
             overflow: hidden;
         }
 
@@ -498,6 +502,11 @@
 
         /* Parsed content styles */
         .message-content span, .message-content em, .message-content strong { transition: opacity 0.3s, font-size 0.3s; }
+        .variant-nav { display: inline-flex; align-items: center; gap: 0.15rem; }
+        .variant-nav .toolbar-button { padding: 0 0.3rem; font-size: 1rem; line-height: 1; }
+        .variant-nav .toolbar-button:disabled { opacity: 0.3; cursor: default; }
+        .variant-count { font-size: 0.72rem; color: var(--text-secondary); min-width: 1.9rem; text-align: center; }
+
         .message-content .hidden { display: none; }
         .message-content .scene-header { display: block; font-weight: bold; margin-bottom: 0.5rem; opacity: 0.8; }
         .message-content .inner-thought,
@@ -716,7 +725,7 @@
         .modal-backdrop {
             position: fixed;
             top: 0; left: 0;
-            width: 100vw; height: 100vh;
+            width: 100vw; height: 100vh; height: 100dvh;
             background-color: var(--modal-backdrop);
             display: flex;
             justify-content: center;
@@ -954,6 +963,35 @@
 
         /* Responsive */
         @media (max-width: 1024px) { .chat-room-header-actions { gap: 0.75rem; } }
+        .card-sources {
+            margin-top: 1.5rem;
+            padding: 1rem 1.25rem;
+            max-width: 460px;
+            text-align: left;
+            background: var(--bg-secondary);
+            border: 1px solid var(--separator-color);
+            border-radius: 8px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+        .card-sources p { margin: 0 0 0.5rem 0; }
+        .card-sources ul { margin: 0.5rem 0 0.75rem 0; padding-left: 1.2rem; }
+        .card-sources li { margin-bottom: 0.35rem; }
+        .card-sources a { color: var(--button-bg); text-decoration: none; font-weight: 600; }
+        .card-sources a:hover { text-decoration: underline; }
+        .card-sources-note { margin: 0; font-size: 0.8rem; opacity: 0.85; }
+
+        .filter-disclosure {
+            width: 100%;
+            padding: 0.35rem;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            background: none;
+            border: none;
+            border-top: 1px solid var(--separator-color);
+            cursor: pointer;
+        }
+
         @media (max-width: 768px) {
             .chat-room-title { font-size: 1rem; }
             .message { max-width: 90%; }
