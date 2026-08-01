@@ -12,14 +12,34 @@ import { resolveOpenRouterKey } from './apiKeys';
 
 const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
-export const OPENROUTER_MODELS = [
+export interface OpenRouterModelOption {
+    id: string;
+    label: string;
+    /** ':free' 모델. 하루 요청 수 제한이 따로 걸린다. */
+    free?: boolean;
+}
+
+/**
+ * 무료 모델(:free)은 하루 요청 수가 제한된다.
+ * 크레딧 구매 이력이 없으면 50회/일, 누적 $10 이상 구매했으면 1,000회/일.
+ * 분당 20회는 양쪽 공통이다. 계정을 나눠도 전역으로 계산되므로 우회되지 않는다.
+ *
+ * 무료 모델은 대체로 추론·에이전트 용도로 만들어진 것이라 창작 문체는 유료 모델만 못할 수 있다.
+ * 여기 담은 것은 '무료 중 가장 큰 모델'이라는 기준이며, 실제 RP 품질은 직접 비교해봐야 한다.
+ */
+export const OPENROUTER_MODELS: OpenRouterModelOption[] = [
     { id: 'anthropic/claude-opus-4.5', label: 'Claude Opus 4.5 (가장 강력, 비쌈)' },
     { id: 'anthropic/claude-sonnet-4.5', label: 'Claude Sonnet 4.5 (균형, 권장)' },
     { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
     { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash (빠르고 저렴)' },
     { id: 'openai/gpt-4o', label: 'GPT-4o' },
     { id: 'deepseek/deepseek-chat', label: 'DeepSeek Chat (매우 저렴)' },
-] as const;
+
+    { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'Nemotron 3 Ultra 550B — 무료 중 최대, 컨텍스트 100만', free: true },
+    { id: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'Nemotron 3 Super 120B — 무료, 빠른 편', free: true },
+    { id: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B — 무료, 구글 계열', free: true },
+    { id: 'inclusionai/ling-3.0-flash:free', label: 'Ling 3.0 Flash 124B — 무료', free: true },
+];
 
 export const DEFAULT_OPENROUTER_MODEL = 'anthropic/claude-sonnet-4.5';
 

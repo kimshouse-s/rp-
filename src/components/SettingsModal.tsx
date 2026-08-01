@@ -596,12 +596,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onS
                                         className="chat-title-input"
                                         style={{padding: '8px'}}
                                     >
-                                        {OPENROUTER_MODELS.map(m => (
-                                            <option key={m.id} value={m.id}>{m.label}</option>
-                                        ))}
+                                        <optgroup label="유료">
+                                            {OPENROUTER_MODELS.filter(m => !m.free).map(m => (
+                                                <option key={m.id} value={m.id}>{m.label}</option>
+                                            ))}
+                                        </optgroup>
+                                        <optgroup label="무료 (하루 요청 수 제한)">
+                                            {OPENROUTER_MODELS.filter(m => m.free).map(m => (
+                                                <option key={m.id} value={m.id}>{m.label}</option>
+                                            ))}
+                                        </optgroup>
                                     </select>
                                     <p className="description" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
-                                        모델별 가격은 <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer">openrouter.ai/models</a> 에서 확인하세요.
+                                        {OPENROUTER_MODELS.find(m => m.id === currentSettings.openRouterModel)?.free
+                                            ? '무료 모델입니다. 하루 1,000회(누적 $10 이상 구매 시), 분당 20회까지 쓸 수 있습니다. 추론·에이전트 목적으로 만들어진 모델이라 창작 문체는 유료 모델만 못할 수 있습니다.'
+                                            : '유료 모델입니다. 잔액에서 차감됩니다.'}
+                                        {' '}가격과 전체 목록은 <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer">openrouter.ai/models</a>,
+                                        학습 데이터 사용 여부는 <a href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener noreferrer">개인정보 설정</a>에서 확인하세요.
                                     </p>
                                 </div>
                             ) : currentSettings.provider === 'claude' ? (
