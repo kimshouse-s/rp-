@@ -82,6 +82,7 @@ export const App: React.FC = () => {
                     temperature: room.temperature ?? 0.8,
                     topP: room.topP ?? 0.95,
                     thinkingMode: room.thinkingMode ?? 'simple',
+                    responseLength: ['short', 'long'].includes(room.responseLength) ? room.responseLength : 'normal',
                     thinkingModeInstructions: room.thinkingModeInstructions ?? DEFAULT_THINKING_MODE_INSTRUCTIONS,
                     mode: room.mode || 'roleplay', // Migration
                     modelName: (() => {
@@ -166,6 +167,7 @@ export const App: React.FC = () => {
             frequencyPenalty: 0.0,
             thinkingMode: 'simple',
             thinkingModeInstructions: DEFAULT_THINKING_MODE_INSTRUCTIONS,
+            responseLength: 'normal',
             mode: 'roleplay', // Default mode
             modelName: 'gemini-3.1-pro-preview',
             ragThreshold: 0.0,
@@ -240,6 +242,7 @@ export const App: React.FC = () => {
                     temperature: importedRoom.temperature ?? 0.8,
                     topP: importedRoom.topP ?? 0.95,
                     thinkingMode: importedRoom.thinkingMode ?? 'simple',
+                    responseLength: ['short', 'long'].includes(importedRoom.responseLength) ? importedRoom.responseLength : 'normal',
                     thinkingModeInstructions: importedRoom.thinkingModeInstructions ?? DEFAULT_THINKING_MODE_INSTRUCTIONS,
                     modelName: importedRoom.modelName === 'gemini-3-pro-preview' ? 'gemini-3.1-pro-preview' : (importedRoom.modelName ?? 'gemini-3.1-pro-preview'),
                     ragThreshold: importedRoom.ragThreshold === 0.75 || importedRoom.ragThreshold === 0.65 || importedRoom.ragThreshold === 0.55 ? 0.0 : (importedRoom.ragThreshold ?? 0.0),

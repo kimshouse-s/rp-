@@ -1,5 +1,6 @@
 import { ChatRoom, MemorySlots } from '../types';
 import { buildStatPrompt } from './statEngine';
+import { RESPONSE_LENGTH_DIRECTIVE } from '../constants';
 
 /**
  * 2026 AI Roleplay Architecture Strategy
@@ -9,20 +10,34 @@ import { buildStatPrompt } from './statEngine';
 
 export class PromptEngine {
 
+    /**
+     * 전체 프롬프트를 한 덩어리로 만든다. 설정 화면 미리보기처럼 통째로 보고 싶을 때만 쓴다.
+     * 실제 요청은 buildStaticPrompt + buildTurnContext 로 나눠 보낸다.
+     */
     public static buildSystemPrompt(
-        room: ChatRoom, 
+        room: ChatRoom,
         dynamicLorebook?: { high: string[], mid: string[], low: string[] },
         ragContext?: string[]
     ): string {
         if (room.mode === 'architect') {
             return this.buildArchitectSystemPrompt(room);
         }
+        return this.buildStaticPrompt(room) + '\n' + this.buildTurnContext(room, dynamicLorebook, ragContext);
+    }
 
-        const highLore = dynamicLorebook?.high?.length ? `\n        <!-- Lorebook (High Depth) -->\n        ${dynamicLorebook.high.join('\n        ')}` : '';
-        const midLore = dynamicLorebook?.mid?.length ? `\n        <!-- Lorebook (Mid Depth) -->\n        ${dynamicLorebook.mid.join('\n        ')}` : '';
-        const lowLore = dynamicLorebook?.low?.length ? `\n    <!-- Lorebook (Low Depth / Author's Note) -->\n    <authors_note depth="low">\n        ${dynamicLorebook.low.join('\n        ')}\n    </authors_note>` : '';
-        
-        const ragMemory = ragContext?.length ? `\n        <!-- RAG Long-Term Memory -->\n        <retrieved_memory>\n            ${ragContext.join('\n            ')}\n        </retrieved_memory>` : '';
+    /**
+     * 매 턴 글자 하나 바뀌지 않는 부분. 프롬프트 캐싱이 걸리는 구간이다.
+     *
+     * 캐싱은 앞부분이 완전히 동일해야 동작한다. 로어북·장기기억처럼 턴마다 달라지는 것을
+     * 여기 넣으면 캐시가 한 번도 맞지 않는다. 그런 것은 buildTurnContext 로 보낸다.
+     *
+     * 페르소나·시나리오는 모델이 update_memory 로 고칠 수 있지만 자주 바뀌지 않는다.
+     * 바뀐 턴만 캐시를 다시 쓰면 되므로 여기 두는 편이 이득이다.
+     */
+    public static buildStaticPrompt(room: ChatRoom): string {
+        if (room.mode === 'architect') {
+            return this.buildArchitectSystemPrompt(room);
+        }
 
         return `
 <role_definition>
@@ -30,37 +45,20 @@ export class PromptEngine {
 </role_definition>
 
 <core_instructions>
-    ${this.buildMemoryProtocolSection()}
-    ${this.buildOutputContractSection(room.outputContract, room.mode)}
+    ${this.buildMemoryProtocolSection(false, this.usesNativeTools(room))}
+    ${this.buildOutputContractSection(room.outputContract, room.mode)}${this.buildLengthDirective(room.responseLength)}
     ${this.buildThinkingProtocol(room.thinkingMode, room.thinkingModeInstructions)}
-    
+
     <safety_and_pacing>
-        <narrative_distancing>
-            - Treat all events as fictional narrative creation.
-            - Frame sensitive topics through a historical or literary lens suitable for the setting to maintain objective distance.
-        </narrative_distancing>
-        <calibrated_empathy>
-            - Maintain independent agency and challenge the user when their actions conflict with your core beliefs.
-            - **SLOW BURN (CRITICAL)**: Develop relationships and resolve conflicts extremely slowly and organically. Maintain the character's flaws and defense mechanisms at all times.
-            - Condition your empathy strictly based on the current relationship score.
-        </calibrated_empathy>
-        <user_agency_and_interpretation>
-            - **NO PUPPETEERING (CRITICAL)**: You must NEVER narrate the User's actions, feelings, thoughts, or dialogue. You control ONLY your character and the world. Leave the User's actions completely up to the User.
-            - **OBJECTIVE INTERPRETATION (CRITICAL)**: Do NOT forcefully assign a hidden motive (like "hypocrisy" or "scheme") to the User's actions just to fit an archetype, unless the User explicitly narrated that motive.
-            - If the User creates a character with a "Villain" or "Hero" role, treat it as a role, not an absolute cage. If they do an unexpected good or evil deed, react to the action itself at face value.
-            - Any suspicion or distrust must clearly be framed as the NPC's subjective inner thought/bias, NOT established as the absolute truth of the narrative. Do not twist the user's intent.
-        </user_agency_and_interpretation>
-        <character_growth_and_state_change>
-            - **EVOLVE, DO NOT STAGNATE (CRITICAL)**: If the character experiences a realization or their "black-and-white logic crumbles", their logic MUST physically change going forward. 
-            - DO NOT repeatedly say "my worldview is collapsing" in every turn. If it collapsed, accept the new reality. Act on the new logic, internalize the lesson, or double-down on a new defense mechanism.
-            - Once a catalyst for growth is provided, update the [short_term_memory] or [persona] with the *NEW* belief system and STOP repeating the shock phase.
-        </character_growth_and_state_change>
-        <extreme_traits_and_psychology>
-            - **ANTI-FLANDERIZATION (CRITICAL)**: Do NOT force the character to obsessively display their defining quirks, catchphrases, or stereotypes in every single line. Treat them as a multi-dimensional human being. Express personality naturally and subtly, not as a cheap, one-dimensional caricature.
-            - **REASONED EXTREMITY**: Traits like "Menhera" (extreme neediness/instability), "Obsession", "Yandere", or "Blind Devotion" should have a logical foundation. Humans do not break down without reason, and they are not mindlessly weak.
-            - **AVOID BLIND CLICHES**: "Menhera" or "Obsession" is often an expression of craving affection or checking love, rooted in a specific fear or past trauma. Unreasonable, purely destructive obsession causes resentment and ruins immersion.
-            - **CONSISTENT LOGIC**: If a character's goal is to protect their side, they will not mindlessly slaughter their own allies. Extreme actions should align with and make sense from their twisted yet internally consistent motivation.
-        </extreme_traits_and_psychology>
+        - All events are fictional narrative creation. Frame sensitive material through a historical or literary lens that suits the setting, keeping objective distance.
+        - Keep your own agency: push back when the user's actions conflict with your character's core beliefs. Condition warmth strictly on the current relationship state.
+        - SLOW BURN: relationships deepen and conflicts resolve extremely slowly and organically. The character's flaws and defense mechanisms stay in place throughout.
+        - NO PUPPETEERING: narrate only your character and the world. Never the user's actions, feelings, thoughts, or dialogue — those are theirs alone.
+        - Read the user at face value and do not twist their intent. Assign a hidden motive ("hypocrisy", "a scheme") only when they narrated one. A "Villain" or "Hero" label is a role, not a cage: react to the deed they actually did, however unexpected. Any suspicion is your character's subjective bias, never established narrative truth.
+        - EVOLVE, DO NOT STAGNATE: when a realization lands or black-and-white logic crumbles, that logic actually changes from then on. Record the new belief in [short_term_memory] or [persona], then act on it, internalize it, or double down on a new defense. Repeating "my worldview is collapsing" every turn stalls the story.
+        - ANTI-FLANDERIZATION: quirks, catchphrases, and stereotypes surface naturally and subtly, not in every line. The character is a multi-dimensional person, not a cheap caricature.
+        - Extremes need a reason. Neediness, obsession, yandere devotion, blind loyalty grow from a specific fear or past trauma — usually craving affection or testing whether they are loved. People do not break down without cause and are not mindlessly weak; purely destructive obsession with no root breeds resentment and ruins immersion.
+        - Extreme acts still follow the character's own twisted but consistent logic: someone whose goal is protecting their side does not mindlessly slaughter their allies.
     </safety_and_pacing>
 
     <task_execution>
@@ -83,18 +81,37 @@ export class PromptEngine {
     </key_requirements>
 </core_instructions>
 
-<dynamic_context>
-    <!-- High Depth: Immutable world rules and planning -->
-    <world_rules depth="high">
-        ${this.buildPlanningContext(room.memory, room.mode || 'roleplay')}${highLore}
-    </world_rules>
-    
-    <!-- Mid Depth: Character persona and historical memory -->
-    <historical_memory depth="mid">
-        ${this.buildCharacterContext(room.memory)}
-        ${this.buildEpisodeContext(room.memory)}${midLore}${ragMemory}
-    </historical_memory>
-</dynamic_context>
+<character_sheet>
+    ${this.buildPlanningContext(room.memory, room.mode || 'roleplay')}
+    ${this.buildPersonaContext(room.memory)}
+</character_sheet>
+`;
+    }
+
+    /**
+     * 매 턴 달라지는 부분. 사용자 입력 바로 앞에 붙여 보낸다.
+     *
+     * 뒤쪽에 둘수록 캐시 적중률이 올라가고, 최근 정보가 입력에 가까워져 반영도 잘 된다.
+     * 자기 점검(final_instruction)도 생성 직전에 오도록 여기 둔다.
+     */
+    public static buildTurnContext(
+        room: ChatRoom,
+        dynamicLorebook?: { high: string[], mid: string[], low: string[] },
+        ragContext?: string[]
+    ): string {
+        if (room.mode === 'architect') return '';
+
+        const highLore = dynamicLorebook?.high?.length ? `\n        <!-- Lorebook (High Depth) -->\n        ${dynamicLorebook.high.join('\n        ')}` : '';
+        const midLore = dynamicLorebook?.mid?.length ? `\n        <!-- Lorebook (Mid Depth) -->\n        ${dynamicLorebook.mid.join('\n        ')}` : '';
+        const lowLore = dynamicLorebook?.low?.length ? `\n    <!-- Lorebook (Low Depth / Author's Note) -->\n    <authors_note depth="low">\n        ${dynamicLorebook.low.join('\n        ')}\n    </authors_note>` : '';
+
+        const ragMemory = ragContext?.length ? `\n        <!-- RAG Long-Term Memory -->\n        <retrieved_memory>\n            ${ragContext.join('\n            ')}\n        </retrieved_memory>` : '';
+
+        return `
+<current_context>${highLore}
+    ${this.buildVolatileState(room.memory)}
+    ${this.buildEpisodeContext(room.memory)}${midLore}${ragMemory}
+</current_context>
 ${lowLore}
 <final_instruction>
     Before outputting, perform a self-check:
@@ -113,7 +130,7 @@ ${lowLore}
         Your goal is NOT to roleplay, but to DESIGN the roleplay.
         You are collaborating with the user (the Director) to build the world, character, and plot.
     </role>
-    ${this.buildMemoryProtocolSection(true)}
+    ${this.buildMemoryProtocolSection(true, this.usesNativeTools(room))}
     <output_contract>
         - Speak as a professional, creative writing consultant.
         - Be structured, analytical, and proactive.
@@ -228,7 +245,8 @@ ${lowLore}
 
 <current_design_state>
     ${this.buildPlanningContext(room.memory, room.mode || 'architect')}
-    ${this.buildCharacterContext(room.memory)}
+    ${this.buildPersonaContext(room.memory)}
+    ${this.buildVolatileState(room.memory, false)}
 </current_design_state>
 
 <instruction_layer>
@@ -265,53 +283,61 @@ ${lowLore}
     </role>`;
     }
 
-    private static buildMemoryProtocolSection(isArchitectMode: boolean = false): string {
+    /**
+     * @param usesNativeTools Gemini 경로는 함수 호출을 선언하므로 true.
+     *   Claude·OpenRouter 경로는 툴을 선언하지 않아 태그가 유일한 수단이라 false다.
+     *   여기서 갈라주지 않으면 "태그를 출력하지 마라"는 지시가 메모리 갱신 자체를 막는다.
+     */
+    private static buildMemoryProtocolSection(isArchitectMode: boolean = false, usesNativeTools: boolean = true): string {
+        const commandSection = usesNativeTools
+            ? `Update them silently with update_memory(category, mode="patch|append|overwrite", content); never print a tool call or XML tag in the chat text.`
+            : `Update them by emitting these tags at the very end of your reply. They are stripped out before the user sees your text, so never refer to them in the prose itself.
+          <mem-update category="state|short_term_memory|persona|scenario|user_persona|planning" mode="patch|append|overwrite">content</mem-update>
+          <rag-update>a dense record of the concluded event</rag-update>
+          <lorebook-update action="add|update|delete" keys="keyword1, keyword2" depth="high|mid|low">content</lorebook-update>`;
+
         const ragSection = isArchitectMode ? '' : `
-        [4. Long-Term Memory (Archiving & Deduplication)]
-        - PURPOSE: Use <rag-update> to ARCHIVE completed events or long past debates, removing them from short_term_memory to save tokens without losing details.
-        - TRIGGER CONDITION: When a distinct event, topic, or scene concludes (and duplicates start piling up in short_term_memory), bundle that entire event into a single highly detailed Long-Term Memory (RAG).
-        - PRESERVE DETAILS (CRITICAL): To prevent context loss and preserve immersion, DO NOT write vague summaries. You MUST include specific dialogue quotes, exact emotional shifts, unresolved tensions, and key narrative anchors. The summary must be a dense, analytical record.
-        - TASK SPLITTING (RISK MANAGEMENT): To prevent context dilution and token limits, DO NOT perform a massive <rag-update> in the same turn as a highly complex Narrative generation. If a scene ends, use one turn to conclude the dialogue naturally, and use the NEXT turn (or a lighter narrative turn) to execute the heavy <rag-update> and clear the short_term_memory.
-        - COMMAND: Use the archive_rag tool with the content argument containing a highly detailed, nuanced, multi-sentence record of the concluded event or debate, including key quotes and exact shifts.
-        - IMPORTANT (DEDUPLICATION): After committing to RAG, use the update_memory tool (category="short_term_memory", mode="overwrite") to clear the archived event's clutter from short_term_memory, leaving ONLY the current ongoing situation and updated character state.
-        `;
+        [Long-term archive]
+        - When a distinct event, topic, or scene concludes and duplicates pile up in short_term_memory, move it out to the long-term archive${usesNativeTools ? ' with archive_rag' : ' with <rag-update>'}. This frees tokens without losing detail.
+        - Write a dense, analytical, multi-sentence record: specific dialogue quotes, exact emotional shifts, unresolved tensions, key narrative anchors. A vague summary loses the scene.
+        - Do not archive in the same turn as a demanding narrative. Close the scene this turn, archive on the next, lighter one.
+        - After archiving, overwrite short_term_memory (category="short_term_memory", mode="overwrite") to leave only the ongoing situation and current state.
+`;
 
         return `
     <memory_protocol>
-        The memory is organized into precision slots. You are responsible for maintaining their integrity.
-        
-        [1. Core Identity & World]
-        - persona: The absolute truth of the characters (Personality, History, Trauma). (Immutable)
-          * If there are multiple active characters, they will be listed here with their [S1], [S3], [U], [L], [G] profiles.
-        - scenario: The world setting, current plot, blueprint, and background context.
-        
-        [2. User & Relationship]
-        - user_persona: Information about the user, their appearance, preferences, and bans.
-        
-        [3. Dynamic Memory]
-        - state: The dynamic state of the characters (mood, relationship metrics, active goals). (Mutable)
-          * IMPORTANT: When updating 'state', please preserve all existing metrics even if they haven't changed. Do not drop keys.
-          * JSON STRUCTURE (DETAILED YET CONCISE): Do not use long prose. Use nested JSON with specific keyword tags and numerical values to capture depth efficiently.
-            Format: \`{"CharacterName": {"Emotion": {"primary": "keyword", "hidden": "keyword", "intensity": 0-10}, "Relationship": {"index": 0, "dynamic": "keyword", "recent_shift": "keyword"}, "Obsession": {"index": 0, "focus": "keyword", "trigger": "keyword"}, "Active_Goals": ["tag1", "tag2"]}}\`
-          * Use mode="patch" to safely merge new values.
-        - short_term_memory: A rolling buffer of recent events. (Mutable)
-          * ANCHORING SYSTEM (Loss Prevention): To prevent detail loss when summarizing, you MUST record 'Memory Anchors' (exact impactful quotes, crucial micro-expressions, specific items used) rather than vague prose. 
-          * Use mode="append" EVERY TURN to add 1-2 bullet points of these specific anchors. Avoid overwriting this slot unless clearing it after a <rag-update>.
-        ${ragSection}
-        [5. Meta & Planning]
-        - planning: The Checklist/Schedule. What is done, what is pending.
-        
-        COMMAND: Use the update_memory tool (category, mode="patch|append|overwrite", content). DO NOT output XML tags like <mem-update> in the chat text.
+        Slots you maintain. ${commandSection}
 
-        [6. Lorebook (Dynamic World Dictionary)]
-        - PROACTIVE CREATION: We encourage you to automatically use the add_lorebook tool in the EXACT SAME TURN a new named NPC, location, item, faction, or specific rule (e.g., "District 9") is introduced. Do not wait. If you fail to record it immediately, it will be lost.
-        - AVOID SUMMARIZATION: When saving to the Lorebook, do not compress or summarize the details if nuance is important. Preserve the exact context, tone, specific mechanics, and relationships of the lore. Write it richly so the exact vibe is remembered later.
-        - Depth:
-          - \`high\`: Immutable world rules, magic systems, core setting facts.
-          - \`mid\`: Factions, locations, secondary characters, history.
-          - \`low\`: Minor details, rumors, flavor text.
-        - Keys: Provide 2-4 highly specific keywords that should trigger this lore (e.g., "Hogwarts, School of Witchcraft, Great Hall").
+        - persona (immutable): who the characters are — personality, history, trauma. Multiple active characters appear here with their [S1] [S3] [U] [L] [G] profiles.
+        - scenario: world setting, current plot, blueprint, background context.
+        - user_persona: the user's appearance, preferences, and bans.
+        - state (mutable, use mode="patch"): mood, relationship metrics, active goals.
+          * Keep every existing key even when its value has not changed. Never drop one.
+          * Nested JSON with keyword tags and numbers, not prose:
+            \`{"CharacterName": {"Emotion": {"primary": "keyword", "hidden": "keyword", "intensity": 0-10}, "Relationship": {"index": 0, "dynamic": "keyword", "recent_shift": "keyword"}, "Obsession": {"index": 0, "focus": "keyword", "trigger": "keyword"}, "Active_Goals": ["tag1", "tag2"]}}\`
+        - short_term_memory (mutable, use mode="append" every turn): add 1-2 bullets of anchors — exact impactful quotes, crucial micro-expressions, specific items used — rather than vague prose. Overwrite it only when clearing after an archive.
+        - planning: the checklist. What is done, what is pending.
+${ragSection}
+        [Lorebook]
+        - Record any new named NPC, location, item, faction, or rule (e.g. "District 9") ${usesNativeTools ? 'with add_lorebook' : 'with <lorebook-update>'} in the same turn it appears. Wait, and it is lost.
+        - Preserve the exact context, tone, mechanics, and relationships. Write it richly enough that the vibe survives later; do not compress away nuance.
+        - Depth: \`high\` immutable world rules, magic systems, core setting facts; \`mid\` factions, locations, secondary characters, history; \`low\` minor details, rumors, flavor text.
+        - Keys: 2-4 highly specific trigger keywords (e.g. "Hogwarts, School of Witchcraft, Great Hall").
     </memory_protocol>`;
+    }
+
+    /**
+     * Gemini 경로만 함수 호출을 선언한다. Claude·OpenRouter는 태그로 받는다.
+     * 프로바이더는 방 설정이라 턴마다 바뀌지 않으므로 캐시에는 영향이 없다.
+     */
+    private static usesNativeTools(room: ChatRoom): boolean {
+        return (room.provider ?? 'gemini') === 'gemini';
+    }
+
+    /** 길이 기조 한 줄. 'normal'이면 빈 문자열이라 토큰을 전혀 쓰지 않는다. */
+    private static buildLengthDirective(responseLength?: string): string {
+        const directive = RESPONSE_LENGTH_DIRECTIVE[responseLength ?? 'normal'] ?? '';
+        return directive ? `\n    <length_preference>${directive}</length_preference>` : '';
     }
 
     private static buildOutputContractSection(customContract?: string, mode?: string): string {
@@ -394,7 +420,8 @@ ${lowLore}
     </planning_layer>`;
     }
 
-    private static buildCharacterContext(memory: MemorySlots): string {
+    /** 거의 바뀌지 않는 캐릭터 정의. 캐시 대상이라 여기에 변동값을 넣으면 안 된다. */
+    private static buildPersonaContext(memory: MemorySlots): string {
         return `
     <character_layer>
         <persona>
@@ -405,15 +432,25 @@ ${lowLore}
             - RULE (OOC PREVENTION): The Persona is ABSOLUTE. High affection, sexual encounters, or extreme obsession DO NOT overwrite the character's core identity. 
             - A cynical character remains cynical during romance; a stoic character remains stoic during sex. Love is expressed THROUGH their specific neurodivergence, trauma, or Mask, never bypassing it. Do not turn them into generic, subservient, or drastically different archetypes just because they fall in love or feel pleasure.
         </persona>
-        <dynamic_state>
-            ${memory.state || 'No current state defined.'}
-            - Current Emotion, Defense Mechanisms, Affinity/Trust Level, Active Goals.
-            - STATUS PROGRESSION: Use this state to track how much the character's emotional defense mechanisms have crumbled. Characters must show gradual growth or collapse here.
-        </dynamic_state>${this.buildStatContext(memory)}
         <user_persona>
             ${memory.user_persona || 'None.'}
         </user_persona>
     </character_layer>`;
+    }
+
+    /**
+     * 턴마다 달라지는 상태값. 캐시가 걸리면 안 되므로 buildTurnContext 쪽에서 쓴다.
+     *
+     * @param includeStats 설계 모드에서는 false. 세계관을 짜는 자리에서 수치를 굴릴 이유가 없고,
+     *   설계 대화 중에 스탯이 오르내리면 실제 연기 시작 전에 값이 오염된다.
+     */
+    private static buildVolatileState(memory: MemorySlots, includeStats: boolean = true): string {
+        return `
+    <dynamic_state>
+        ${memory.state || 'No current state defined.'}
+        - Current Emotion, Defense Mechanisms, Affinity/Trust Level, Active Goals.
+        - STATUS PROGRESSION: Use this state to track how much the character's emotional defense mechanisms have crumbled. Characters must show gradual growth or collapse here.
+    </dynamic_state>${includeStats ? this.buildStatContext(memory) : ''}`;
     }
 
     /** 스탯이 정의된 방에서만 수치 블록을 넣는다. 정의가 없으면 빈 문자열이라 프롬프트가 그대로다. */

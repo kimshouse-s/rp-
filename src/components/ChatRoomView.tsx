@@ -324,8 +324,13 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({ chatRoom, onBack, ai
         const touchedById = new Map(touchedChunks.map(c => [c.id, c]));
         const updatedVectorMemory = (currentChat.vectorMemory || []).map(c => touchedById.get(c.id) ?? c);
 
-        // 4. Build System Prompt with injected contexts
-        const systemInstruction = PromptEngine.buildSystemPrompt(currentChat, dynamicLorebook, ragContext);
+        // 4. 프롬프트를 두 덩어리로 나눈다.
+        //    systemInstruction 은 매 턴 동일해서 프롬프트 캐싱이 걸리고,
+        //    turnContext 는 매 턴 달라지므로 사용자 입력 바로 앞에 붙인다.
+        //    한 덩어리로 보내면 로어북·장기기억이 앞부분을 매번 바꿔 캐시가 한 번도 안 맞는다.
+        const systemInstruction = PromptEngine.buildStaticPrompt(currentChat);
+        const turnContext = PromptEngine.buildTurnContext(currentChat, dynamicLorebook, ragContext);
+        const promptWithContext = turnContext ? `${turnContext}\n\n${prompt}` : prompt;
 
         // 4-a. Claude 경로. 툴을 선언하지 않고 태그 규약으로 받는다.
         // processAIResponse의 정규식 폴백이 <mem-update> 등을 그대로 파싱한다.
@@ -336,7 +341,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({ chatRoom, onBack, ai
                     role: h.role === 'user' ? 'user' as const : 'assistant' as const,
                     text: h.parts.map(p => p.text).join('\n'),
                 })),
-                prompt,
+                prompt: promptWithContext,
                 model: currentChat.claudeModel || DEFAULT_CLAUDE_MODEL,
             });
 
@@ -351,7 +356,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({ chatRoom, onBack, ai
                     role: h.role === 'user' ? 'user' as const : 'assistant' as const,
                     text: h.parts.map(p => p.text).join('\n'),
                 })),
-                prompt,
+                prompt: promptWithContext,
                 model: currentChat.openRouterModel || DEFAULT_OPENROUTER_MODEL,
                 temperature: currentChat.temperature,
                 topP: currentChat.topP,
@@ -426,7 +431,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({ chatRoom, onBack, ai
             },
         });
 
-        let response = await chat.sendMessage({ message: prompt });
+        let response = await chat.sendMessage({ message: promptWithContext });
         
         let loops = 0;
         let allFunctionCalls: any[] = [];
@@ -623,7 +628,9 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({ chatRoom, onBack, ai
         responseText = responseText.replace(loreUpdateRegex, '').trim();
 
         // 스탯 적용. 감쇠·상한·발현은 전부 여기서 강제되므로 모델이 규칙을 무시해도 값이 흐르지 않는다.
-        if (newMemory.stats?.length) {
+        // 설계 모드에서는 건너뛴다. 세계관을 짜는 대화로 수치가 오르내리면
+        // 정작 연기를 시작하기도 전에 값이 오염된다.
+        if (chatRoom.mode !== 'architect' && newMemory.stats?.length) {
             const statResult = applyStatTurn(newMemory.stats, statDeltas);
             newMemory = { ...newMemory, stats: statResult.stats };
             if (statResult.log.length) logs.push(statResult.log.join('\n'));

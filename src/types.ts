@@ -103,6 +103,12 @@ export interface Snapshot {
 }
 
 export type ThinkingMode = 'none' | 'simple' | 'deep';
+
+/**
+ * 응답 길이 기조. 출력 계약의 상황별 등급은 그대로 두고 전체를 위아래로 민다.
+ * 'normal'은 계약의 기본값을 그대로 쓰므로 프롬프트에 아무것도 더하지 않는다.
+ */
+export type ResponseLength = 'short' | 'normal' | 'long';
 /**
  * 'gemini'     — 브라우저에서 Gemini API를 직접 호출한다. Gemini 키가 필요하다.
  * 'claude'     — 개발 서버의 /api/chat 을 거쳐 Claude 구독 인증으로 생성한다. 키가 필요 없다.
@@ -165,6 +171,7 @@ export interface ChatRoom {
     xtcProbability?: number; // Exclude Top Choices (XTC) UI setting
     thinkingMode: ThinkingMode;
     thinkingModeInstructions: ThinkingModeInstructions;
+    responseLength?: ResponseLength; // 없으면 'normal'
     mode: ChatMode; // New field
     provider?: ChatProvider; // 없으면 'gemini'
     modelName: string;       // Gemini 모델. provider가 'claude'여도 유지된다(전환 시 복귀용).

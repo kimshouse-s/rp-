@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChatRoom, ThinkingMode, LorebookEntry, MemorySlots, ChatProvider, StatDefinition, StatKind } from '../types';
+import { ChatRoom, ThinkingMode, LorebookEntry, MemorySlots, ChatProvider, StatDefinition, StatKind, ResponseLength } from '../types';
 import { DEFAULT_CUSTOM_PROMPT, DEFAULT_THINKING_MODE_INSTRUCTIONS, DEFAULT_ROLE_DEFINITION, DEFAULT_OUTPUT_CONTRACT } from '../constants';
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL } from '../services/claudeClient';
 import { OPENROUTER_MODELS, DEFAULT_OPENROUTER_MODEL } from '../services/openRouterClient';
@@ -29,6 +29,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onS
         presencePenalty: room.presencePenalty ?? 0,
         frequencyPenalty: room.frequencyPenalty ?? 0,
         thinkingModeInstructions: room.thinkingModeInstructions,
+        responseLength: room.responseLength ?? 'normal',
         provider: room.provider ?? 'gemini',
         modelName: room.modelName,
         claudeModel: room.claudeModel ?? DEFAULT_CLAUDE_MODEL,
@@ -198,8 +199,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onS
                                 </ul>
                                 <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                     <button className="preset-button" onClick={() => setStats([...stats, { id: 'affection', label: '호감도', kind: 'persistent', min: 0, max: 100, value: 0, baseline: 10, decayPerTurn: 1, description: '진심 어린 교류에만 오른다. 형식적인 호의로는 움직이지 않는다.' }])}>+ 호감도</button>
-                                    <button className="preset-button" onClick={() => setStats([...stats, { id: 'obsession', label: '집착도', kind: 'persistent', min: 0, max: 100, value: 0, baseline: 0, decayPerTurn: 2, description: '불안이 자극될 때만 오른다. 안심하면 빠르게 가라앉는다.' }])}>+ 집착도</button>
-                                    <button className="preset-button" onClick={() => setStats([...stats, { id: 'patience', label: '인내심', kind: 'gauge', min: 0, max: 100, value: 0, threshold: 100, resetTo: 0, triggerEffect: '참아온 말을 한 번에 쏟아낸다. 이후 다시 평소 태도로 돌아간다.', description: '무시당하거나 선을 넘길 때 쌓인다.' }])}>+ 인내심 (게이지)</button>
+                                    <button className="preset-button" onClick={() => setStats([...stats, { id: 'jealousy', label: '질투', kind: 'persistent', min: 0, max: 100, value: 0, baseline: 0, decayPerTurn: 2, description: '유저가 다른 대상에게 관심을 보이거나 자신이 뒷전이 될 때 오른다. 관심을 되돌려주면 가라앉는다. 이 값이 높아도 인내심이 남아 있는 한 겉으로는 삼킨다.' }])}>+ 질투</button>
+                                    <button className="preset-button" onClick={() => setStats([...stats, { id: 'obsession', label: '집착도', kind: 'persistent', min: 0, max: 100, value: 0, baseline: 0, decayPerTurn: 2, description: '불안이 자극될 때만 오른다. 안심하면 빠르게 가라앉는다. 인내심이 터진 뒤에 특히 오르기 쉽다.' }])}>+ 집착도</button>
+                                    <button className="preset-button" onClick={() => setStats([...stats, { id: 'patience', label: '인내심', kind: 'gauge', min: 0, max: 100, value: 0, threshold: 100, resetTo: 0, triggerEffect: '그동안 삼켜온 바로 그것이 터져 나온다. 참은 게 고백이면 고백이, 질투면 질투가, 욕망이면 욕망이 드러난다. 터진 뒤에는 다시 평소의 자제로 돌아가지만 이미 드러난 사실은 없던 일이 되지 않는다.', description: '하고 싶은 말이나 행동을 삼킬 때마다 쌓인다. 화를 참을 때만이 아니라 좋아한다고 말하지 못했을 때, 질투를 숨겼을 때, 욕망을 눌렀을 때도 오른다. 소심하거나 자존심이 셀수록 잘 쌓인다.' }])}>+ 인내심 (게이지)</button>
                                 </div>
                             </div>
 
@@ -639,6 +641,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ room, onClose, onS
                                     Claude에는 temperature·Top-P·페널티가 적용되지 않습니다. 아래 슬라이더는 Gemini 전용입니다.
                                 </p>
                             )}
+                            <div className="slider-group">
+                                <label htmlFor="responseLength">응답 길이</label>
+                                <select
+                                    id="responseLength"
+                                    value={currentSettings.responseLength}
+                                    onChange={(e) => setCurrentSettings(prev => ({ ...prev, responseLength: e.target.value as ResponseLength }))}
+                                    className="chat-title-input"
+                                    style={{padding: '8px'}}
+                                >
+                                    <option value="short">짧게 (대사 위주, 절정에도 4문단까지)</option>
+                                    <option value="normal">보통 (기본 2~4문단, 절정에 6~8문단)</option>
+                                    <option value="long">길게 (기본 4~6문단, 절정에 10문단까지)</option>
+                                </select>
+                                <p className="description" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                                    상황에 따라 길이를 조절하는 규칙은 출력 계약에 들어 있고, 이 설정은 그 기조를 위아래로 밉니다.
+                                    출력 토큰이 입력보다 비싸므로 비용에 가장 크게 영향을 줍니다.
+                                </p>
+                            </div>
                             <div className="slider-group">
                                 <label htmlFor="temperature"><span>온도 (창의성)</span> <span>{currentSettings.temperature.toFixed(2)}</span></label>
                                 <input type="range" id="temperature" name="temperature" min="0" max="1" step="0.05" value={currentSettings.temperature} onChange={handleSliderChange} />

@@ -45,8 +45,17 @@ export async function generateWithOpenRouter(request: OpenRouterRequest): Promis
         throw new Error('OpenRouter 키가 없습니다. 설정 → 모델 설정 → API 키에서 입력하세요.');
     }
 
-    const messages: OpenRouterMessage[] = [
-        { role: 'system', content: request.system },
+    // 시스템 프롬프트는 매 턴 동일하므로 캐싱 대상이다.
+    // Gemini·GPT·DeepSeek 등은 알아서 캐싱하지만, Anthropic 계열은 cache_control 표시가 있어야 한다.
+    // 캐시 읽기는 원가의 0.1배라, 이 표시 하나로 반복 요청 비용이 크게 줄어든다.
+    // 최소 길이(대략 1024토큰) 미만이면 캐시가 안 잡히지만 그때도 그냥 무시될 뿐 손해는 없다.
+    const useCacheControl = request.model.startsWith('anthropic/');
+    const systemContent: any = useCacheControl
+        ? [{ type: 'text', text: request.system, cache_control: { type: 'ephemeral' } }]
+        : request.system;
+
+    const messages: any[] = [
+        { role: 'system', content: systemContent },
         ...request.messages.map(m => ({ role: m.role, content: m.text })),
         { role: 'user', content: request.prompt },
     ];
